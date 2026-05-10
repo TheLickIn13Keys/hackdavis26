@@ -16,6 +16,11 @@ bun dev
 
 Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
+Create `.env.local` from `.env.example` before running the demo. The 3D map
+needs `NEXT_PUBLIC_MAPBOX_TOKEN`; the Street View walkthrough needs
+`NEXT_PUBLIC_GOOGLE_MAPS_API_KEY` with Maps Embed API enabled. Set
+`NEXT_PUBLIC_API_URL` to the FastAPI backend, usually `http://localhost:8000`.
+
 You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.

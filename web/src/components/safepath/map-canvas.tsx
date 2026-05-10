@@ -120,6 +120,7 @@ export function MapCanvas({
 
     map.on("load", () => {
       map.resize();
+      enable3DScene(map);
 
       // Sources start empty; the second effect sets data on every change.
       map.addSource(INACTIVE_SOURCE, {
@@ -334,6 +335,59 @@ function emptyFC(): GeoJSON.FeatureCollection {
 
 function pitchForWidth(width: number) {
   return width < 1100 ? 0 : 58;
+}
+
+function enable3DScene(map: MapboxMap) {
+  if (!map.getSource("mapbox-dem")) {
+    map.addSource("mapbox-dem", {
+      type: "raster-dem",
+      url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+      tileSize: 512,
+      maxzoom: 14,
+    });
+    map.setTerrain({ source: "mapbox-dem", exaggeration: 1.08 });
+  }
+
+  const layers = map.getStyle().layers ?? [];
+  const labelLayer = layers.find((layer) => {
+    const layout = (layer as { layout?: Record<string, unknown> }).layout;
+    return layer.type === "symbol" && Boolean(layout?.["text-field"]);
+  });
+  if (!map.getLayer("sp-3d-buildings")) {
+    map.addLayer(
+      {
+        id: "sp-3d-buildings",
+        source: "composite",
+        "source-layer": "building",
+        filter: ["==", "extrude", "true"],
+        type: "fill-extrusion",
+        minzoom: 14,
+        paint: {
+          "fill-extrusion-color": "#252525",
+          "fill-extrusion-height": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            14,
+            0,
+            16,
+            ["coalesce", ["get", "height"], 14],
+          ],
+          "fill-extrusion-base": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            14,
+            0,
+            16,
+            ["coalesce", ["get", "min_height"], 0],
+          ],
+          "fill-extrusion-opacity": 0.72,
+        },
+      },
+      labelLayer?.id,
+    );
+  }
 }
 
 function activeFC(route: Route): GeoJSON.FeatureCollection {

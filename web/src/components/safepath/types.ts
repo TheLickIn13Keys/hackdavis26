@@ -6,6 +6,7 @@ export type RouteSegment = {
   id: string;
   level: SafetyLevel;
   points: RoutePoint[];
+  edgeIds?: string[];
   /** Legacy single-line blurbs (mock routes & fallback splits) */
   reason?: string;
   /** One sanitized line per Directions step merged here (accordion) */

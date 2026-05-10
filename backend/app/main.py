@@ -56,6 +56,15 @@ def health() -> dict:
     return {"ok": True}
 
 
+@app.get("/demo/config")
+def demo_config() -> dict:
+    """Non-secret frontend config hints for the standalone demo."""
+    return {
+        "google_maps_configured": bool(settings.google_maps_api_key),
+        "streetview_radius_m": settings.streetview_radius_m,
+    }
+
+
 @app.get("/scores")
 def scores_geojson() -> dict:
     """All bikeable edges as GeoJSON FeatureCollection with safety scores."""

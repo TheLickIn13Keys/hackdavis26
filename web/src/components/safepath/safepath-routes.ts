@@ -76,6 +76,7 @@ function edgesToSegments(edges: RouteEdge[]): RouteSegment[] {
       // duplicates the previous edge's last point.
       const skip = current.points.length > 0 ? 1 : 0;
       current.points.push(...points.slice(skip));
+      current.edgeIds?.push(edge.edge_id);
       if (reason) stressBuffer.push(reason);
     } else {
       if (current) {
@@ -86,6 +87,7 @@ function edgesToSegments(edges: RouteEdge[]): RouteSegment[] {
         id: `seg-${segments.length}-${edge.edge_id}`,
         level,
         points,
+        edgeIds: [edge.edge_id],
         reason,
       };
       stressBuffer = reason ? [reason] : [];

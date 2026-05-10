@@ -85,6 +85,7 @@
     border-radius: 4px; overflow: hidden;
   }
   .sv-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .sv-pano { position: absolute; inset: 0; }
   .sv-frame .overlay { position: absolute; inset: 0; pointer-events: none; }
   .sv-frame .empty {
     position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -127,6 +128,15 @@
   }
   .status-bar .dot.idle { background: var(--muted); }
   .status-bar .dot.alive { background: var(--safe); animation: pulse 1s infinite; }
+  .camera-chip {
+    position: absolute; bottom: 48px; left: 12px; background: rgba(20, 25, 35, 0.92);
+    padding: 7px 10px; border-radius: 6px; font-size: 11px; color: var(--muted);
+    border: 1px solid var(--border); display: flex; gap: 10px; align-items: center;
+  }
+  .camera-chip button {
+    background: transparent; color: var(--text); border: 1px solid var(--border);
+    border-radius: 4px; padding: 3px 7px; cursor: pointer; font-size: 11px;
+  }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
   @keyframes slideIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
   @keyframes slideRight { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: none; } }
@@ -167,6 +177,7 @@
         <option value="40">8x</option>
       </select>
       <button id="reset" class="secondary">Reset</button>
+      <button id="tilt" class="secondary">3D</button>
       <button id="start" class="primary">Start tour</button>
     </div>
   </header>
@@ -177,6 +188,10 @@
       <div class="status-bar">
         <span id="dot" class="dot idle"></span>
         <span id="status">Idle. Pick a route and press Start tour.</span>
+      </div>
+      <div class="camera-chip">
+        <span id="camera-mode">3D follow ready</span>
+        <button id="follow">Follow</button>
       </div>
       <div class="toast-stack" id="toasts"></div>
       <div class="legend">
@@ -231,6 +246,11 @@ const apiBase = apiOverride || API;
 const tokenFromQuery = new URLSearchParams(location.search).get("token");
 mapboxgl.accessToken = tokenFromQuery || window.MAPBOX_TOKEN || "";
 
+// Google Maps browser key for the embedded Street View panorama. Pass
+// ?google_key=... or set window.GOOGLE_MAPS_API_KEY before this script.
+const googleKeyFromQuery = new URLSearchParams(location.search).get("google_key");
+const googleMapsKey = googleKeyFromQuery || window.GOOGLE_MAPS_API_KEY || "";
+
 if (!mapboxgl.accessToken) {
   document.getElementById("status").textContent =
     "Missing Mapbox token. Append ?token=pk.your_token to the URL.";
@@ -252,14 +272,22 @@ const map = new mapboxgl.Map({
   style: "mapbox://styles/mapbox/dark-v11",
   center: [-121.7405, 38.5449],
   zoom: 13.2,
+  pitch: 60,
+  bearing: -25,
+  antialias: true,
 });
 
 let scoresFC = null;
 let activeStream = null;
 let cyclist = null;
 let customPoints = [];
+let followCamera = true;
+let streetViewRadiusM = 100;
 
 map.on("load", async () => {
+  enable3DScene();
+  hydrateDemoConfig();
+
   // Background layer: scored edges, color by safety.
   try {
     const r = await fetch(`${apiBase}/scores`);
@@ -307,6 +335,58 @@ map.on("load", async () => {
 
 function emptyFC() { return { type: "FeatureCollection", features: [] }; }
 
+async function hydrateDemoConfig() {
+  try {
+    const r = await fetch(`${apiBase}/demo/config`);
+    if (!r.ok) return;
+    const cfg = await r.json();
+    streetViewRadiusM = cfg.streetview_radius_m || streetViewRadiusM;
+  } catch (e) {
+    console.warn("demo config failed", e);
+  }
+}
+
+function enable3DScene() {
+  if (!map.getSource("mapbox-dem")) {
+    map.addSource("mapbox-dem", {
+      type: "raster-dem",
+      url: "mapbox://mapbox.mapbox-terrain-dem-v1",
+      tileSize: 512,
+      maxzoom: 14,
+    });
+    map.setTerrain({ source: "mapbox-dem", exaggeration: 1.15 });
+  }
+
+  const layers = map.getStyle().layers || [];
+  const labelLayer = layers.find(
+    layer => layer.type === "symbol" && layer.layout && layer.layout["text-field"]
+  );
+  if (!map.getLayer("3d-buildings")) {
+    map.addLayer({
+      id: "3d-buildings",
+      source: "composite",
+      "source-layer": "building",
+      filter: ["==", "extrude", "true"],
+      type: "fill-extrusion",
+      minzoom: 14,
+      paint: {
+        "fill-extrusion-color": "#273346",
+        "fill-extrusion-height": [
+          "interpolate", ["linear"], ["zoom"],
+          14, 0,
+          16, ["coalesce", ["get", "height"], 16],
+        ],
+        "fill-extrusion-base": [
+          "interpolate", ["linear"], ["zoom"],
+          14, 0,
+          16, ["coalesce", ["get", "min_height"], 0],
+        ],
+        "fill-extrusion-opacity": 0.65,
+      },
+    }, labelLayer && labelLayer.id);
+  }
+}
+
 function setSourceLine(id, lineString) {
   const feature = lineString
     ? { type: "Feature", geometry: lineString, properties: {} }
@@ -332,7 +412,7 @@ function fitBoundsToCoords(coords) {
   if (!coords || !coords.length) return;
   const b = new mapboxgl.LngLatBounds(coords[0], coords[0]);
   for (const c of coords) b.extend(c);
-  map.fitBounds(b, { padding: 80, duration: 700 });
+  map.fitBounds(b, { padding: 80, duration: 700, pitch: 58, bearing: -25 });
 }
 
 // ---------- Custom point picking ------------------------------------------
@@ -446,6 +526,18 @@ function escapeHTML(s) {
   }[c]));
 }
 
+function headingBetween(a, b) {
+  if (!a || !b) return map.getBearing();
+  const lon1 = a[0] * Math.PI / 180;
+  const lat1 = a[1] * Math.PI / 180;
+  const lon2 = b[0] * Math.PI / 180;
+  const lat2 = b[1] * Math.PI / 180;
+  const y = Math.sin(lon2 - lon1) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2)
+    - Math.sin(lat1) * Math.cos(lat2) * Math.cos(lon2 - lon1);
+  return (Math.atan2(y, x) * 180 / Math.PI + 360) % 360;
+}
+
 // Animate cyclist along a polyline over duration_ms.
 let animationFrame = null;
 function animateAlongLine(coords, durationMs, onDone) {
@@ -471,6 +563,17 @@ function animateAlongLine(coords, durationMs, onDone) {
     const lng = coords[i0][0] + (coords[i][0] - coords[i0][0]) * f;
     const lat = coords[i0][1] + (coords[i][1] - coords[i0][1]) * f;
     setMarker([lng, lat]);
+    if (followCamera && Math.round(now) % 2 === 0) {
+      const bearing = headingBetween(coords[i0], coords[i] || coords[i0]);
+      map.easeTo({
+        center: [lng, lat],
+        zoom: Math.max(map.getZoom(), 16.5),
+        pitch: 68,
+        bearing,
+        duration: 90,
+        easing: t => t,
+      });
+    }
     if (t < 1) animationFrame = requestAnimationFrame(step);
     else onDone && onDone();
   }
@@ -489,7 +592,31 @@ function appendProgress(coords) {
 
 // ---------- Street View panel ---------------------------------------------
 
-function showStreetView(sample) {
+let googleMapsPromise = null;
+let streetViewService = null;
+let streetViewPano = null;
+
+function loadGoogleMaps() {
+  if (!googleMapsKey) return Promise.reject(new Error("Missing Google Maps browser key"));
+  if (window.google && window.google.maps) return Promise.resolve(window.google.maps);
+  if (googleMapsPromise) return googleMapsPromise;
+  googleMapsPromise = new Promise((resolve, reject) => {
+    const cb = `initStreetView_${Date.now()}`;
+    window[cb] = () => {
+      delete window[cb];
+      resolve(window.google.maps);
+    };
+    const script = document.createElement("script");
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(googleMapsKey)}&callback=${cb}`;
+    script.async = true;
+    script.defer = true;
+    script.onerror = () => reject(new Error("Google Maps JavaScript API failed to load"));
+    document.head.appendChild(script);
+  });
+  return googleMapsPromise;
+}
+
+function showStreetView(sample, lngLat, heading) {
   const frame = document.getElementById("sv-frame");
   const meta = document.getElementById("sv-meta");
   if (!sample || !sample.images || !sample.images.length) {
@@ -497,6 +624,57 @@ function showStreetView(sample) {
     meta.innerHTML = "";
     return;
   }
+  renderStreetViewMeta(sample);
+
+  if (googleMapsKey && lngLat) {
+    loadGoogleMaps()
+      .then((gmaps) => showGooglePanorama(gmaps, lngLat, heading, sample))
+      .catch((e) => {
+        console.warn(e);
+        showStaticStreetView(sample);
+      });
+    return;
+  }
+
+  showStaticStreetView(sample);
+}
+
+function showGooglePanorama(gmaps, lngLat, heading, sample) {
+  const frame = document.getElementById("sv-frame");
+  if (!streetViewPano || !document.getElementById("sv-pano")) {
+    frame.innerHTML = `<div id="sv-pano" class="sv-pano"></div>`;
+    streetViewPano = new gmaps.StreetViewPanorama(document.getElementById("sv-pano"), {
+      addressControl: false,
+      clickToGo: false,
+      fullscreenControl: false,
+      imageDateControl: true,
+      linksControl: false,
+      motionTracking: false,
+      panControl: false,
+      pov: { heading: heading || 0, pitch: 0 },
+      visible: true,
+      zoom: 1,
+    });
+    streetViewService = new gmaps.StreetViewService();
+  }
+
+  streetViewService.getPanorama({
+    location: { lat: lngLat[1], lng: lngLat[0] },
+    radius: streetViewRadiusM,
+    source: gmaps.StreetViewSource.OUTDOOR,
+  }, (data, status) => {
+    if (status === gmaps.StreetViewStatus.OK && data && data.location) {
+      streetViewPano.setPano(data.location.pano);
+      streetViewPano.setPov({ heading: heading || 0, pitch: 0 });
+      streetViewPano.setVisible(true);
+    } else {
+      showStaticStreetView(sample);
+    }
+  });
+}
+
+function showStaticStreetView(sample) {
+  const frame = document.getElementById("sv-frame");
   // Show first image (forward view); overlay any hazards whose image_index === 0.
   const img = sample.images[0];
   const url = `${apiBase}/image?path=${encodeURIComponent(img.image_path)}`;
@@ -507,14 +685,18 @@ function showStreetView(sample) {
   imgEl.onload = () => paintBoxes(sample, 0);
   // also handle if cached
   if (imgEl.complete) paintBoxes(sample, 0);
+}
 
+function renderStreetViewMeta(sample) {
+  const meta = document.getElementById("sv-meta");
   const score = sample.score == null ? "—" : sample.score + "/10";
   const infra = sample.infrastructure || "unknown";
   const reasons = (sample.reasons || []).join(" · ");
   const hazardTags = (sample.hazards || []).slice(0, 4)
     .map(h => `<span class="hazard-tag">${escapeHTML(h.type)}${h.severity ? ` ·${h.severity}` : ""}</span>`).join("");
+  const source = googleMapsKey ? "interactive Street View" : "cached static image";
   meta.innerHTML = `
-    <div><strong>Safety ${score}</strong> · ${escapeHTML(infra)}</div>
+    <div><strong>Safety ${score}</strong> · ${escapeHTML(infra)} · ${source}</div>
     <div style="margin-top:4px;">${hazardTags}</div>
     ${reasons ? `<div style="margin-top:4px;">${escapeHTML(reasons)}</div>` : ""}`;
 }
@@ -618,13 +800,22 @@ async function startTour() {
     const step = JSON.parse(ev.data);
     // Find the most informative sample (with hazards or with image) for the panel.
     const samples = step.samples || [];
+    if (!samples.length && step.image_path) {
+      samples.push({
+        images: [{ image_path: step.image_path }],
+        hazards: step.hazards || [],
+        reasons: step.reasons || [],
+        score: step.score,
+      });
+    }
     const showSample = samples.find(s => (s.hazards && s.hazards.length) || (s.images && s.images.length))
                     || samples[0]
                     || null;
-    if (showSample) showStreetView(showSample);
+    const coords = (step.geometry && step.geometry.coordinates) || [];
+    const heading = headingBetween(coords[0], coords[coords.length - 1]);
+    if (showSample) showStreetView(showSample, coords[0], heading);
 
     // Animate the cyclist along this edge's geometry over its duration.
-    const coords = (step.geometry && step.geometry.coordinates) || [];
     queue = queue.then(() => new Promise(resolve => {
       animateAlongLine(coords, step.duration_ms || 600, () => {
         appendProgress(coords);
@@ -655,6 +846,19 @@ async function startTour() {
 // ---------- Wire controls -------------------------------------------------
 
 document.getElementById("start").addEventListener("click", startTour);
+document.getElementById("tilt").addEventListener("click", () => {
+  const pitched = map.getPitch() > 20;
+  map.easeTo({
+    pitch: pitched ? 0 : 65,
+    bearing: pitched ? 0 : -25,
+    duration: 650,
+  });
+});
+document.getElementById("follow").addEventListener("click", () => {
+  followCamera = !followCamera;
+  document.getElementById("camera-mode").textContent = followCamera ? "3D follow on" : "3D follow paused";
+  document.getElementById("follow").textContent = followCamera ? "Pause" : "Follow";
+});
 document.getElementById("reset").addEventListener("click", () => {
   if (activeStream) { activeStream.close(); activeStream = null; }
   if (animationFrame) cancelAnimationFrame(animationFrame);

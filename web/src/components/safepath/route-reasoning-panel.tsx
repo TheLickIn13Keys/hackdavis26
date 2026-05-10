@@ -7,6 +7,12 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from "@/components/ui/accordion";
+import {
+  fetchEdgeDetail,
+  safepathImageUrl,
+  type EdgeDetail,
+  type EdgeSample,
+} from "@/lib/safepath-api";
 import { DirectionsList } from "./directions-list";
 import { sanitizeDirectionsLine } from "./mapbox-route-steps";
 import {
@@ -14,7 +20,7 @@ import {
   type SeenHazard,
   type StreetViewTourState,
 } from "./street-view-tour";
-import type { Route, RoutePoint, SafetyLevel } from "./types";
+import type { Route, RoutePoint, RouteSegment, SafetyLevel } from "./types";
 import {
   letterGrade,
   levelFromScore,
@@ -159,6 +165,8 @@ export function RouteReasoningPanel({
             holds a "Preview ride" play button. */}
         {tour ? <StreetViewTourCard tour={tour} /> : null}
       </div>
+
+      <StreetEvidence route={route} />
 
       {/* ── Scrollable accordion: Safe / Caution / Avoid only ── */}
       <div className="mt-4 min-h-0 flex-1 overflow-y-auto overflow-x-hidden pb-2 pr-0.5 [scrollbar-gutter:stable]">
@@ -366,6 +374,164 @@ function hasOptionalPlacePrefix(line: string): boolean {
   const before = t.slice(0, idx).trim();
   if (/^\d{1,2}:\d{2}/.test(before)) return false;
   return before.length <= 72;
+}
+
+function StreetEvidence({ route }: { route: Route }) {
+  const segments = route.segments.filter(
+    (seg) => seg.level !== "safe" && (seg.edgeIds?.length ?? 0) > 0,
+  );
+  const segmentKey = segments.map((seg) => seg.id).join("|");
+  const [selectedId, setSelectedId] = useState<string | null>(
+    segments[0]?.id ?? null,
+  );
+  const [edge, setEdge] = useState<EdgeDetail | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    setSelectedId(segments[0]?.id ?? null);
+  }, [route.id, segmentKey]);
+
+  const selected =
+    segments.find((seg) => seg.id === selectedId) ?? segments[0] ?? null;
+  const edgeId = selected?.edgeIds?.[0] ?? null;
+
+  useEffect(() => {
+    if (!edgeId) {
+      setEdge(null);
+      return;
+    }
+    const controller = new AbortController();
+    setLoading(true);
+    fetchEdgeDetail(edgeId, controller.signal)
+      .then(setEdge)
+      .catch((err) => {
+        if (!controller.signal.aborted) {
+          console.warn("Edge evidence unavailable", err);
+          setEdge(null);
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => controller.abort();
+  }, [edgeId]);
+
+  if (!segments.length) return null;
+
+  const sample = chooseEvidenceSample(edge);
+  const image = sample?.images?.[0]?.image_path;
+  const score = edge?.mean_score ?? sample?.score ?? null;
+  const evidenceReasons =
+    sample?.reasons && sample.reasons.length > 0
+      ? sample.reasons
+      : selected?.stressNotes ?? [];
+
+  return (
+    <div className="shrink-0 overflow-hidden rounded-[14px] border border-[#2a2a2a] bg-[#161616]">
+      <div className="flex items-center justify-between border-b border-[#262626] px-3 py-2.5">
+        <div className="min-w-0">
+          <p className="type-overline">Street evidence</p>
+          <p className="mt-1 truncate text-[13px] font-medium text-white">
+            Why this area is risky
+          </p>
+        </div>
+        <span className="rounded-full bg-[#2a2a2a] px-2 py-1 text-[11px] text-[#bdbdbd]">
+          {segments.length}
+        </span>
+      </div>
+
+      <div className="flex gap-1 overflow-x-auto border-b border-[#262626] px-3 py-2">
+        {segments.slice(0, 6).map((seg, i) => (
+          <button
+            key={seg.id}
+            type="button"
+            onClick={() => setSelectedId(seg.id)}
+            className={[
+              "shrink-0 rounded-full border px-2.5 py-1 text-[11px] font-medium transition-colors",
+              seg.id === selected?.id
+                ? "border-white/30 bg-white text-black"
+                : "border-[#333] bg-[#202020] text-[#cfcfcf] hover:bg-[#2a2a2a]",
+            ].join(" ")}
+          >
+            {seg.level === "danger" ? "Avoid" : "Caution"} {i + 1}
+          </button>
+        ))}
+      </div>
+
+      <div className="grid grid-cols-[112px_1fr] gap-3 p-3">
+        <div className="aspect-square overflow-hidden rounded-[10px] bg-black">
+          {image ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={safepathImageUrl(image)}
+              alt="Street View evidence"
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center px-2 text-center text-[11px] text-[#777]">
+              {loading ? "Loading..." : "No image yet"}
+            </div>
+          )}
+        </div>
+
+        <div className="min-w-0 space-y-2">
+          <div className="flex items-center gap-2 text-[12px]">
+            <span
+              className={[
+                "rounded-full px-2 py-0.5 font-medium",
+                selected?.level === "danger"
+                  ? "bg-[#3d0d0d] text-[#ff8f86]"
+                  : "bg-[#3d2e0d] text-[#ffd60a]",
+              ].join(" ")}
+            >
+              {score == null ? selected?.level : `${score.toFixed(1)} / 10`}
+            </span>
+            <span className="truncate text-[#8e8e93]">
+              {edge?.name || selected?.reason || "Route segment"}
+            </span>
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            {(sample?.hazards ?? []).slice(0, 4).map((hazard, i) => (
+              <span
+                key={`${hazard.type}-${i}`}
+                className="rounded-full bg-[#2a1616] px-2 py-0.5 text-[11px] text-[#ffaaa3]"
+              >
+                {hazard.type}
+                {hazard.severity ? ` ${hazard.severity}` : ""}
+              </span>
+            ))}
+            {!sample?.hazards?.length && (
+              <span className="text-[11px] text-[#777]">
+                No localized hazard boxes for this image.
+              </span>
+            )}
+          </div>
+
+          <ul className="space-y-1">
+            {evidenceReasons.slice(0, 2).map((reason, i) => (
+              <li
+                key={`${reason}-${i}`}
+                className="line-clamp-2 text-[12px] leading-snug text-[#c8c8c8]"
+              >
+                {reason}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function chooseEvidenceSample(edge: EdgeDetail | null): EdgeSample | null {
+  const samples = edge?.samples ?? [];
+  return (
+    samples.find((sample) => sample.hazards?.length && sample.images?.length) ??
+    samples.find((sample) => sample.images?.length) ??
+    samples[0] ??
+    null
+  );
 }
 
 /** Collapses identical wording with and without `{place}:` prefix (ordering preserved). */

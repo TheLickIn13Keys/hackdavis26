@@ -10,9 +10,9 @@ HackDavis 2026 project. A "Street View agent" walks Davis virtually, scores ever
 - Backend: Python + FastAPI (this repo)
 - Frontend: handed off to a teammate — **frontend was deleted from this repo**, do not recreate it
 - Vision model: Gemini 2.5 Flash, structured JSON via response_schema
-- Routing: OSMnx + NetworkX Dijkstra (chose over OSRM because hackathon timeline)
+- Routing: OSMnx + NetworkX Dijkstra (chose over OSRM because hackathon timeline — OSRM custom-profile rebuild is fiddly)
 - Storage: SQLite, schema in `app/db/store.py`
-- Coverage: Davis citywide
+- Coverage: Davis citywide, ~3k sample points, ~$5 Gemini + ~$21 Street View
 
 **Pipeline architecture (two passes)**
 1. **Edge pass** — sample every ~80m along bikeable roads. Each sample fetches **2 Street View images** (forward + 90° right) and sends both to Gemini in one call → one combined safety score per location.

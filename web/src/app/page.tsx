@@ -180,6 +180,7 @@ export default function Home() {
 
   const select = (id: string) => {
     setNavigationActive(false);
+    setCyclistPosition(null);
     setSelectedRouteId(id);
   };
 
