@@ -1,0 +1,14 @@
+{
+  "features": [
+    "length_m",
+    "highway_encoded",
+    "intersection_density",
+    "highway_speed_interaction"
+  ],
+  "medians": {
+    "length_m": 48.435003143049045,
+    "highway_encoded": 1.0,
+    "intersection_density": 1.0,
+    "highway_speed_interaction": 25.0
+  }
+}

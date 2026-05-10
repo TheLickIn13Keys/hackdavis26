@@ -1,0 +1,155 @@
+{
+  "dataset_info": {
+    "total_samples": 4261,
+    "measured_scores": 3,
+    "features_engineered": 4,
+    "selected_features": 4
+  },
+  "eda_insights": {
+    "top_correlations": {
+      "length_m": 0.03923520133415889,
+      "highway_speed_interaction": 0.038063468987053026,
+      "highway_encoded": 0.010138915419777003,
+      "intersection_density": 0.010138915419776661,
+      "maxspeed_encoded": null,
+      "lanes_encoded": null,
+      "has_cycleway": null,
+      "cycleway_protection": null,
+      "surface_quality": null,
+      "has_traffic_signals": null
+    },
+    "multicollinearity_issues": [],
+    "perfect_multicollinearity_features": [
+      "highway_encoded",
+      "intersection_density",
+      "has_cycleway",
+      "cycleway_protection",
+      "has_traffic_signals",
+      "is_oneway",
+      "has_stop_sign",
+      "bike_highway_interaction"
+    ],
+    "data_quality_warnings": [
+      "maxspeed_encoded",
+      "lanes_encoded",
+      "has_cycleway",
+      "cycleway_protection",
+      "surface_quality",
+      "has_traffic_signals",
+      "is_oneway",
+      "has_stop_sign",
+      "speed_lanes_interaction",
+      "bike_highway_interaction"
+    ],
+    "outlier_summary": {
+      "highway_encoded": {
+        "count": 456,
+        "percentage": 10.701713212860831
+      },
+      "intersection_density": {
+        "count": 456,
+        "percentage": 10.701713212860831
+      },
+      "highway_speed_interaction": {
+        "count": 264,
+        "percentage": 6.195728702182586
+      },
+      "mean_score": {
+        "count": 223,
+        "percentage": 5.233513259798169
+      }
+    },
+    "hypothesis_tests": {
+      "H1_speed_vs_safety": {
+        "hypothesis": "Higher-speed roads have lower safety scores",
+        "test": "Spearman correlation",
+        "skipped": true,
+        "reason": "maxspeed_encoded has no variation in current dataset"
+      },
+      "H2_cycleway_vs_safety": {
+        "hypothesis": "Roads with bike infrastructure have higher safety scores",
+        "test": "Welch's t-test",
+        "skipped": true,
+        "reason": "has_cycleway has no variation in current dataset"
+      },
+      "H4_surface_quality_vs_safety": {
+        "hypothesis": "Worse surface quality reduces safety scores",
+        "test": "Spearman correlation",
+        "skipped": true,
+        "reason": "surface_quality has no variation in current dataset"
+      }
+    }
+  },
+  "model_performance": {
+    "linear_regression": {
+      "r2": -0.021322591827410697,
+      "mse": 0.043471645717541856,
+      "mae": 0.10039957619669097,
+      "cv_r2_mean": -0.0029736938186990082,
+      "cv_r2_std": 0.010392914875296831,
+      "adj_r2": -0.026140151222822983
+    },
+    "ridge_regression": {
+      "r2": -0.00871211436813324,
+      "mse": 0.042934892479313876,
+      "mae": 0.0977219533749655,
+      "cv_r2_mean": -0.0029703268506780624,
+      "cv_r2_std": 0.01038764205814432,
+      "adj_r2": -0.00871211436813324
+    },
+    "random_forest": {
+      "r2": 0.15276313545391595,
+      "mse": 0.03606184873330625,
+      "mae": 0.07696072441932626,
+      "cv_r2_mean": 0.06342841095074414,
+      "cv_r2_std": 0.29494074174889984,
+      "adj_r2": 0.15276313545391595
+    },
+    "gradient_boosting": {
+      "r2": 0.34878233690945215,
+      "mse": 0.027718473831294378,
+      "mae": 0.06692699398451017,
+      "cv_r2_mean": -0.03897805677132695,
+      "cv_r2_std": 0.21727615049074686,
+      "adj_r2": 0.34878233690945215
+    }
+  },
+  "best_model": "gradient_boosting",
+  "statistical_tests": {
+    "heteroscedasticity_pvalue": 0.11525140019359513,
+    "normality_pvalue": 0.0,
+    "f_statistic": 1.6297659816906809,
+    "f_pvalue": 0.16386395204761
+  },
+  "feature_importance": {
+    "random_forest": {
+      "length_m": 0.9906852354907307,
+      "highway_encoded": 0.004532713966033637,
+      "intersection_density": 0.003702167019764288,
+      "highway_speed_interaction": 0.001079883523471423
+    },
+    "gradient_boosting": {
+      "length_m": 0.9922144701367336,
+      "highway_encoded": 0.0057004453659107585,
+      "intersection_density": 0.0019113272575100606,
+      "highway_speed_interaction": 0.00017375723984567427
+    }
+  },
+  "hypotheses_tested": [
+    "H1: Higher-speed roads have lower safety scores",
+    "H2: Roads with dedicated bike infrastructure have higher safety scores",
+    "H3: Traffic control features (signals, stops) improve safety perception",
+    "H4: Road surface quality significantly impacts safety scores",
+    "H5: Interaction between speed limits and lane count affects safety"
+  ],
+  "key_findings": [
+    "Best performing model: gradient_boosting (R\u00b2 = 0.349)",
+    "Most important feature: length_m",
+    "Dataset quality: 3/4261 measured scores.",
+    "No pre-registered hypothesis reached p<0.05 support."
+  ],
+  "report_metadata": {
+    "output_cleaned_for_json": true,
+    "includes_eda_guided_hypothesis_tests": true
+  }
+}
