@@ -6,6 +6,7 @@ Run with:
     python -m app.scoring.pipeline score-intersections    # 4-way intersection scoring
     python -m app.scoring.pipeline aggregate              # recompute per-edge means
     python -m app.scoring.pipeline classify-intersections # backfill osm_control / type
+    python -m app.scoring.pipeline statistical-analysis   # run EDA and statistical models
     python -m app.scoring.pipeline all                    # run everything
 """
 
@@ -31,7 +32,7 @@ from app.db.store import (
     upsert_intersection_score,
     upsert_sample,
 )
-from app.scoring import gemini, network, streetview
+from app.scoring import gemini, network, statistical_model, streetview
 
 # bbox = (south, west, north, east). Returned as a tuple for easy unpacking.
 Bbox = tuple[float, float, float, float]
@@ -339,6 +340,13 @@ def cmd_classify_intersections() -> None:
     )
 
 
+def cmd_statistical_analysis(output_dir: Path) -> None:
+    """Run statistical analysis and modeling on the safety scoring data."""
+    log.info("Running statistical analysis...")
+    results = statistical_model.run_statistical_analysis(settings.db_path, output_dir)
+    log.info("Statistical analysis completed. Check %s for results.", output_dir)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -361,6 +369,9 @@ def main() -> None:
 
     sub.add_parser("aggregate")
     sub.add_parser("classify-intersections")
+    p_s = sub.add_parser("statistical-analysis")
+    p_s.add_argument("--output-dir", type=str, default="analysis_output",
+                     help="Directory to save analysis results and plots")
     sub.add_parser("all")
     args = parser.parse_args()
 
@@ -374,6 +385,8 @@ def main() -> None:
         cmd_aggregate()
     elif args.cmd == "classify-intersections":
         cmd_classify_intersections()
+    elif args.cmd == "statistical-analysis":
+        cmd_statistical_analysis(Path(args.output_dir))
     elif args.cmd == "all":
         cmd_extract()
         cmd_score_edges(None, 4, False, None)

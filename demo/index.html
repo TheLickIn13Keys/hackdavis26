@@ -42,6 +42,11 @@
   }
   header button.primary:disabled { opacity: 0.45; cursor: wait; }
   header button.secondary { cursor: pointer; }
+  header a.link-btn {
+    text-decoration: none; display: inline-flex; align-items: center;
+    background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 10px; border-radius: 4px; font-size: 12px;
+  }
 
   main { display: grid; grid-template-columns: 1fr 380px; min-height: 0; }
   #map { width: 100%; height: 100%; }
@@ -95,6 +100,18 @@
     display: inline-block; background: rgba(255,107,107,0.15); color: #ff9a9a;
     padding: 1px 6px; border-radius: 3px; font-size: 10px; margin-right: 4px; margin-top: 2px;
   }
+  .dac-panel {
+    border-top: 1px solid var(--border); padding: 10px 14px; background: var(--panel);
+  }
+  .dac-panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin: 0 0 8px; }
+  .dac-feed { max-height: 140px; overflow-y: auto; font-size: 12px; color: var(--text); }
+  .dac-item {
+    margin-bottom: 7px; padding: 7px 8px; background: var(--panel-2);
+    border-left: 3px solid var(--accent); border-radius: 4px;
+  }
+  .dac-item .meta { color: var(--muted); font-size: 11px; margin-top: 2px; }
+  .dac-empty { color: var(--muted); font-size: 12px; }
 
   .legend {
     position: absolute; bottom: 12px; left: 12px; background: rgba(20, 25, 35, 0.92);
@@ -163,6 +180,8 @@
       </select>
       <button id="reset" class="secondary">Reset</button>
       <button id="start" class="primary">Start tour</button>
+      <a class="link-btn" href="coverage.html" id="open-coverage" title="Open mapped-area coverage view">Mapped area</a>
+      <a class="link-btn" href="/dac/" target="_blank" rel="noopener">Open DAC CesiumSim</a>
     </div>
   </header>
 
@@ -210,6 +229,13 @@
           <div class="empty">Waiting for sample…</div>
         </div>
         <div class="sv-meta" id="sv-meta"></div>
+      </div>
+
+      <div class="dac-panel">
+        <h2>DAC VLA action feed</h2>
+        <div id="dac-feed" class="dac-feed">
+          <div class="dac-empty">No actions yet — actions appear as hazards are perceived.</div>
+        </div>
       </div>
     </aside>
   </main>
@@ -472,6 +498,7 @@ function animateAlongLine(coords, durationMs, onDone) {
 
 // Track progressed coords so we can paint the cyclist's wake.
 let progressed = [];
+let dacActionCount = 0;
 function appendProgress(coords) {
   for (const c of coords) {
     const last = progressed[progressed.length - 1];
@@ -482,12 +509,17 @@ function appendProgress(coords) {
 
 // ---------- Street View panel ---------------------------------------------
 
-function showStreetView(sample) {
+function showStreetView(sample, stepInfo = null) {
   const frame = document.getElementById("sv-frame");
   const meta = document.getElementById("sv-meta");
   if (!sample || !sample.images || !sample.images.length) {
-    frame.innerHTML = `<div class="empty">No imagery for this segment.</div>`;
-    meta.innerHTML = "";
+    frame.innerHTML = `<div class="empty">No cached Street View for this segment.</div>`;
+    const score = stepInfo && stepInfo.score != null ? `${Number(stepInfo.score).toFixed(1)}/10` : "—";
+    const intersection = stepInfo && stepInfo.intersection_score != null
+      ? `${Number(stepInfo.intersection_score).toFixed(1)}/10`
+      : "—";
+    meta.innerHTML = `<div><strong>Edge safety ${score}</strong> · intersection ${intersection}</div>
+      <div style="margin-top:4px;">Using inferred routing score for this step.</div>`;
     return;
   }
   // Show first image (forward view); overlay any hazards whose image_index === 0.
@@ -510,6 +542,35 @@ function showStreetView(sample) {
     <div><strong>Safety ${score}</strong> · ${escapeHTML(infra)}</div>
     <div style="margin-top:4px;">${hazardTags}</div>
     ${reasons ? `<div style="margin-top:4px;">${escapeHTML(reasons)}</div>` : ""}`;
+}
+
+function deriveDacAction(step) {
+  const samples = step.samples || [];
+  const hazards = samples.flatMap(s => s.hazards || []);
+  const maxSeverity = hazards.reduce((m, h) => Math.max(m, Number(h.severity || 0)), 0);
+  if (maxSeverity >= 7 || (step.intersection_score != null && step.intersection_score <= 3)) {
+    return { action: "avoid", reason: "critical hazard / risky intersection", priority: "high" };
+  }
+  if (maxSeverity >= 4 || (step.score != null && step.score <= 5)) {
+    return { action: "scan", reason: "moderate hazard risk", priority: "medium" };
+  }
+  return { action: "patrol", reason: "low observed risk", priority: "low" };
+}
+
+function pushDacAction(step) {
+  const feed = document.getElementById("dac-feed");
+  const empty = feed.querySelector(".dac-empty");
+  if (empty) empty.remove();
+
+  const decision = deriveDacAction(step);
+  dacActionCount += 1;
+  const item = document.createElement("div");
+  item.className = "dac-item";
+  item.innerHTML = `
+    <div><strong>#${dacActionCount} ${escapeHTML(decision.action.toUpperCase())}</strong> — ${escapeHTML(decision.reason)}</div>
+    <div class="meta">edge ${escapeHTML(step.edge_id || "unknown")} · priority ${escapeHTML(decision.priority)} · score ${step.score == null ? "—" : Number(step.score).toFixed(1)}</div>
+  `;
+  feed.prepend(item);
 }
 
 function paintBoxes(sample, imageIndex) {
@@ -613,7 +674,8 @@ async function startTour() {
     const showSample = samples.find(s => (s.hazards && s.hazards.length) || (s.images && s.images.length))
                     || samples[0]
                     || null;
-    if (showSample) showStreetView(showSample);
+    showStreetView(showSample, step);
+    pushDacAction(step);
 
     // Animate the cyclist along this edge's geometry over its duration.
     const coords = (step.geometry && step.geometry.coordinates) || [];
@@ -647,6 +709,10 @@ async function startTour() {
 // ---------- Wire controls -------------------------------------------------
 
 document.getElementById("start").addEventListener("click", startTour);
+document.getElementById("open-coverage").addEventListener("click", (ev) => {
+  ev.preventDefault();
+  window.location = "coverage.html" + location.search;
+});
 document.getElementById("reset").addEventListener("click", () => {
   if (activeStream) { activeStream.close(); activeStream = null; }
   if (animationFrame) cancelAnimationFrame(animationFrame);
@@ -664,6 +730,9 @@ document.getElementById("reset").addEventListener("click", () => {
   document.getElementById("fast-score").textContent = "avg safety —";
   document.getElementById("sv-frame").innerHTML = `<div class="empty">Waiting for sample…</div>`;
   document.getElementById("sv-meta").innerHTML = "";
+  dacActionCount = 0;
+  document.getElementById("dac-feed").innerHTML =
+    `<div class="dac-empty">No actions yet — actions appear as hazards are perceived.</div>`;
   clearAlerts();
   document.getElementById("alert-list").classList.add("empty");
   document.getElementById("alert-list").textContent = "No alerts yet — press Start tour.";

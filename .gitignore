@@ -26,12 +26,12 @@ build/
 .env.*.local
 
 # Data / cache
-data/
-*.db
-*.sqlite
-*.sqlite3
-images/
-.cache/
+# data/
+# *.db
+# *.sqlite
+# *.sqlite3
+# images/
+# .cache/
 
 # OS
 .DS_Store

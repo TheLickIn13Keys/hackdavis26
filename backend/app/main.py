@@ -8,7 +8,7 @@ from pathlib import Path
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -28,7 +28,7 @@ log = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-app = FastAPI(title="SafeBike Davis", version="0.2.0")
+app = FastAPI(title="Aggie Street Smarts", version="0.2.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -46,18 +46,27 @@ def _startup() -> None:
         log.warning("Routing graph not yet available: %s", exc)
 
 
-# Serve the standalone demo UI at /demo/. Resolved relative to this file so it
-# works whether uvicorn is launched from backend/ or the repo root.
+# Demo UI directory — mounted at the bottom of the file, AFTER all API routes,
+# so the explicit `/demo/walk` GET handler wins over the StaticFiles fallback.
 _DEMO_DIR = Path(__file__).resolve().parents[2] / "demo"
-if _DEMO_DIR.is_dir():
-    app.mount("/demo", StaticFiles(directory=str(_DEMO_DIR), html=True), name="demo")
-else:
-    log.warning("Demo dir not found at %s; /demo will 404", _DEMO_DIR)
+_DAC_DIST_DIR = Path(__file__).resolve().parents[2] / "cesiumsim" / "dist"
 
 
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
+
+
+@app.get("/", include_in_schema=False)
+def root() -> RedirectResponse:
+    """Default landing page: use the restored demo UI."""
+    return RedirectResponse(url="/demo/")
+
+
+@app.get("/dac", include_in_schema=False)
+def dac_root() -> RedirectResponse:
+    """Convenience route for CesiumSim/DAC UI."""
+    return RedirectResponse(url="/dac/")
 
 
 @app.get("/scores")
@@ -85,7 +94,17 @@ def scores_geojson() -> dict:
 
 @app.get("/intersections")
 def intersections_geojson() -> dict:
-    """All scored intersections as GeoJSON Points."""
+    """All intersections (degree>=3) as GeoJSON Points, including the
+    classification fields the frontend needs to penalize unprotected crossings.
+
+    Properties:
+      node_id            — OSM node id
+      degree             — count of bikeable legs
+      intersection_type  — 't' | 'y' | 'four_way' | 'complex' | null
+      osm_control        — 'traffic_signals' | 'stop' | 'give_way' | 'mini_roundabout' | … | null
+      gemini_control     — 'signal' | 'all_way_stop' | 'uncontrolled' | … | null
+      score              — Gemini-derived 1-10 (null if not photo-scored)
+    """
     with connect(settings.db_path) as conn:
         rows = fetch_all_intersections(conn)
     features = [
@@ -95,6 +114,9 @@ def intersections_geojson() -> dict:
             "properties": {
                 "node_id": r["node_id"],
                 "degree": r["degree"],
+                "intersection_type": r["intersection_type"],
+                "osm_control": r["osm_control"],
+                "gemini_control": r["gemini_control"],
                 "score": r["score"],
             },
         }
@@ -108,6 +130,13 @@ class RouteRequest(BaseModel):
     start_lon: float
     end_lat: float
     end_lon: float
+    # Additional safety-lambda values to run Dijkstra at. Each one produces a
+    # variant route in `variants` with cost_safe = length × (1 + λ × (10−score)/9)
+    # plus the configured intersection penalty. Higher λ = more willing to
+    # detour around low-score edges. The default `safe` variant uses
+    # SAFETY_LAMBDA from env (typically 0.5); pass e.g. [1.5, 3.0] here to get
+    # progressively-safer alternatives.
+    extra_lambdas: list[float] | None = None
 
 
 @app.post("/route")
@@ -115,9 +144,22 @@ def route(req: RouteRequest) -> dict:
     g = load_graph()
     safe = route_path(g, req.start_lat, req.start_lon, req.end_lat, req.end_lon, "cost_safe")
     fast = route_path(g, req.start_lat, req.start_lon, req.end_lat, req.end_lon, "cost_fast")
+    variants: list[dict] = []
+    for lam in req.extra_lambdas or []:
+        edges = route_path(
+            g, req.start_lat, req.start_lon, req.end_lat, req.end_lon, float(lam),
+        )
+        variants.append(
+            {
+                "lambda": float(lam),
+                "edges": [e.__dict__ for e in edges],
+                "summary": route_summary(edges),
+            }
+        )
     return {
         "safe": {"edges": [e.__dict__ for e in safe], "summary": route_summary(safe)},
         "fast": {"edges": [e.__dict__ for e in fast], "summary": route_summary(fast)},
+        "variants": variants,
     }
 
 
@@ -173,31 +215,74 @@ def image(path: str = Query(..., description="Image path returned by /edge/{id}"
 # one event per edge with the edge's geometry, score, and a sample image. Each
 # event is delayed by `step_ms` so the UI can animate in real time.
 
-class WalkRequest(BaseModel):
-    start_lat: float
-    start_lon: float
-    end_lat: float
-    end_lon: float
-    weight: str = "cost_safe"  # "cost_safe" or "cost_fast"
-    step_ms: int = 600
-
-
 def _format_sse(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data)}\n\n"
 
 
-@app.post("/demo/walk")
-async def demo_walk(req: WalkRequest) -> StreamingResponse:
+def _alerts_for_edge(edge, samples: list[dict]) -> list[dict]:
+    """Decide which (if any) agent-perspective alerts to emit before stepping
+    onto `edge`. Order is priority: intersection > hazard > low edge score —
+    we cap at one alert per step so the toast stack/list stays readable."""
+    out: list[dict] = []
+
+    if edge.intersection_score is not None and edge.intersection_score <= 5:
+        out.append({
+            "kind": "scary_intersection",
+            "level": "danger" if edge.intersection_score <= 3 else "warning",
+            "title": "Approaching unprotected intersection"
+                if edge.intersection_score <= 3 else "Caution: intersection ahead",
+            "summary": f"Intersection score {edge.intersection_score:.1f}/10",
+        })
+        return out
+
+    for s in samples:
+        for hz in (s.get("hazards") or []):
+            sev = hz.get("severity") or 0
+            if sev >= 7:
+                hz_type = (hz.get("type") or "hazard").replace("_", " ")
+                out.append({
+                    "kind": "hazard",
+                    "level": "danger" if sev >= 8 else "warning",
+                    "title": f"Hazard: {hz_type}",
+                    "summary": hz.get("note") or f"severity {sev}/10",
+                })
+                return out
+
+    if edge.score is not None and edge.score <= 4:
+        out.append({
+            "kind": "low_score",
+            "level": "danger" if edge.score <= 3 else "warning",
+            "title": f"Low-safety segment{f' on {edge.name}' if edge.name else ''}",
+            "summary": f"Safety {edge.score:.1f}/10 over {int(edge.length_m)} m",
+        })
+
+    return out
+
+
+# GET (not POST) so EventSource can subscribe — the browser's SSE client only
+# supports GET. Per-edge playback duration is derived from `speed_mps` (cyclist
+# speed) divided by `time_scale` (playback multiplier); falls back to step_ms.
+@app.get("/demo/walk")
+async def demo_walk(
+    start_lat: float,
+    start_lon: float,
+    end_lat: float,
+    end_lon: float,
+    weight: str = "cost_safe",
+    step_ms: int = 600,
+    speed_mps: float = 4.0,
+    time_scale: float | None = None,
+) -> StreamingResponse:
     g = load_graph()
 
     async def stream():
         edges = route_path(
-            g, req.start_lat, req.start_lon, req.end_lat, req.end_lon,
-            "cost_safe" if req.weight not in ("cost_safe", "cost_fast") else req.weight,
+            g, start_lat, start_lon, end_lat, end_lon,
+            "cost_safe" if weight not in ("cost_safe", "cost_fast") else weight,
         )
         summary = route_summary(edges)
         yield _format_sse("start", {
-            "weight": req.weight,
+            "weight": weight,
             "edge_count": len(edges),
             "summary": summary,
         })
@@ -205,15 +290,14 @@ async def demo_walk(req: WalkRequest) -> StreamingResponse:
         with connect(settings.db_path) as conn:
             for i, e in enumerate(edges):
                 detail = fetch_edge_detail(conn, e.edge_id)
-                sample_image = None
-                hazards: list[str] = []
-                reasons: list[str] = []
-                if detail and detail["samples"]:
-                    s0 = detail["samples"][0]
-                    if s0.get("images"):
-                        sample_image = s0["images"][0].get("image_path")
-                    hazards = s0.get("hazards") or []
-                    reasons = s0.get("reasons") or []
+                samples = (detail or {}).get("samples") or []
+                if time_scale and time_scale > 0 and speed_mps > 0:
+                    # Real-world traversal time / playback speedup.
+                    play_s = (e.length_m / speed_mps) / time_scale
+                else:
+                    play_s = max(0, step_ms) / 1000.0
+                for alert in _alerts_for_edge(e, samples):
+                    yield _format_sse("alert", alert)
                 yield _format_sse("step", {
                     "i": i,
                     "edge_id": e.edge_id,
@@ -225,11 +309,10 @@ async def demo_walk(req: WalkRequest) -> StreamingResponse:
                     # OSM tags + leg geometry; null = not an intersection.
                     "intersection_source": e.intersection_source,
                     "geometry": e.geometry,
-                    "image_path": sample_image,
-                    "hazards": hazards,
-                    "reasons": reasons[:2],
+                    "samples": samples,
+                    "duration_ms": int(play_s * 1000),
                 })
-                await asyncio.sleep(max(0, req.step_ms) / 1000.0)
+                await asyncio.sleep(play_s)
 
         yield _format_sse("done", {"summary": summary})
 
@@ -240,4 +323,20 @@ async def demo_walk(req: WalkRequest) -> StreamingResponse:
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",  # disable proxy buffering so events arrive in real time
         },
+    )
+
+
+# Mount the standalone demo UI LAST so explicit API routes above (notably the
+# GET /demo/walk SSE handler) take precedence over the StaticFiles fallback.
+if _DEMO_DIR.is_dir():
+    app.mount("/demo", StaticFiles(directory=str(_DEMO_DIR), html=True), name="demo")
+else:
+    log.warning("Demo dir not found at %s; /demo will 404", _DEMO_DIR)
+
+if _DAC_DIST_DIR.is_dir():
+    app.mount("/dac", StaticFiles(directory=str(_DAC_DIST_DIR), html=True), name="dac")
+else:
+    log.warning(
+        "DAC dist dir not found at %s; build with `npm run build` in cesiumsim for /dac",
+        _DAC_DIST_DIR,
     )
