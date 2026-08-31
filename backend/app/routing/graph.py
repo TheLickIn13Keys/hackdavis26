@@ -176,18 +176,69 @@ def nearest_node(g: nx.MultiDiGraph, lat: float, lon: float) -> int:
     return best_node
 
 
+def _edge_safety_cost_at_lambda(data: dict, lam: float, intersection_penalty_m: float) -> float:
+    """Same shape as the cached cost_safe, but recomputed for an arbitrary
+    lambda. Used to generate extra-safe variants without rebuilding the
+    routing graph."""
+    length_m = float(data.get("length", 0.0))
+    score = data.get("safety_score")
+    s = score if score is not None else NEUTRAL_SCORE
+    seg_cost = length_m * (1.0 + lam * (10.0 - s) / 9.0)
+    dest_score = data.get("dest_intersection_score")
+    isect = (
+        intersection_penalty_m * (10.0 - dest_score) / 9.0
+        if dest_score is not None
+        else 0.0
+    )
+    return seg_cost + isect
+
+
 def route_path(
-    g: nx.MultiDiGraph, start_lat: float, start_lon: float, end_lat: float, end_lon: float, weight: str
+    g: nx.MultiDiGraph,
+    start_lat: float,
+    start_lon: float,
+    end_lat: float,
+    end_lon: float,
+    weight: str | float,
 ) -> list[RoutedEdge]:
+    """Compute shortest path under a weight.
+
+    `weight` is either:
+      * a string ("cost_safe" or "cost_fast") — use the precomputed edge attr
+      * a float — interpret as a safety lambda; cost is recomputed on the fly
+        with `_edge_safety_cost_at_lambda(data, lam, intersection_penalty_m)`.
+        Use this to generate extra-safe variants beyond the env's default
+        SAFETY_LAMBDA without rebuilding the cached graph.
+    """
     src = nearest_node(g, start_lat, start_lon)
     dst = nearest_node(g, end_lat, end_lon)
-    nodes = nx.shortest_path(g, src, dst, weight=weight)
+
+    if isinstance(weight, str):
+        weight_arg: str | object = weight
+        edge_picker = lambda kv: kv[1].get(weight, float("inf"))  # noqa: E731
+    else:
+        lam = float(weight)
+        pen = settings.intersection_penalty_m
+
+        def callable_weight(_u: int, _v: int, edges_dict: dict) -> float:
+            # MultiDiGraph: we get the dict of all parallel edges. Take the min.
+            best = float("inf")
+            for data in edges_dict.values():
+                cost = _edge_safety_cost_at_lambda(data, lam, pen)
+                if cost < best:
+                    best = cost
+            return best
+
+        weight_arg = callable_weight
+        edge_picker = lambda kv: _edge_safety_cost_at_lambda(kv[1], lam, pen)  # noqa: E731
+
+    nodes = nx.shortest_path(g, src, dst, weight=weight_arg)
     out: list[RoutedEdge] = []
     for u, v in zip(nodes[:-1], nodes[1:]):
         edges = g.get_edge_data(u, v) or {}
         if not edges:
             continue
-        best_key, best_data = min(edges.items(), key=lambda kv: kv[1].get(weight, float("inf")))
+        best_key, best_data = min(edges.items(), key=edge_picker)
         geom = best_data.get("geometry")
         if geom is not None:
             geometry = {"type": "LineString", "coordinates": list(geom.coords)}

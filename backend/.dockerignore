@@ -1,0 +1,18 @@
+# Heavy artifacts that should be supplied via volume mounts, not baked in.
+data/
+cache/
+
+# Python build & test cruft
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Local secrets and tooling
+.env
+.env.*
+.git/
+.idea/
+.vscode/

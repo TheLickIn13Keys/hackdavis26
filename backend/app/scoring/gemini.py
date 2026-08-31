@@ -58,15 +58,34 @@ sight lines, design adequacy of any bike infrastructure, blocked lanes, debris, 
 
 Consider, in roughly this order:
 - Bike infrastructure: presence and protection of bike lanes (none / painted / buffered / protected),
-  with extra weight on condition and design adequacy when OSM tags already confirm presence
-- Traffic stress: number of lanes, road width, apparent speed limit, traffic volume cues
-- Door zone: parked cars adjacent to the cycling path (look hard at side views)
+  with extra weight on condition and design adequacy when OSM tags already confirm presence.
+  ABSENCE of any bike lane on a road wider than two lanes is a major negative — riders share
+  general traffic lanes with cars.
+- Traffic stress: number of lanes, road width, apparent speed limit, traffic volume cues.
+  Wide pavement (≥ ~30 ft / 4 car-widths edge-to-edge) without lane markings or a bike lane
+  invites speeding even on "residential" streets — do NOT treat width as comfort.
+- Door zone: parked cars adjacent to the cycling path. Where there is no bike lane AND parked
+  cars line the curb, riders are forced into the door zone or out into a moving traffic lane —
+  this alone caps the score at ~5 regardless of how quiet the street looks.
 - Surface: potholes, cracking, debris, gravel, drainage grates
 - Sight lines: blind curves, parked vehicles obscuring driveways
-- General feel: residential street vs arterial vs industrial frontage
+- General feel: residential street vs arterial vs industrial frontage. A "residential" highway
+  tag is not a safety guarantee — many residential streets in US suburbs are wide, fast, and
+  have no bike infrastructure.
 
-Score from 1 (extremely dangerous) to 10 (separated bike path or quiet neighborhood street, safe \
-for a child). Calibrate around 5 = a typical urban arterial with a painted bike lane.
+Score from 1 (extremely dangerous) to 10 (separated bike path, or a TRULY quiet neighborhood \
+street: narrow pavement, traffic calming or visibly low traffic, no door-zone parking conflict). \
+Calibrate:
+- 9–10 reserved for protected/separated paths, greenways, or genuinely calm residential streets
+  with little/no parked-car door-zone conflict.
+- 7–8 = streets with a bike lane in good condition, OR a quiet residential street that has
+  parked cars but enough width for a rider to keep clear of the door zone.
+- ~5 = a typical urban arterial with a painted bike lane, OR a wide residential road with no
+  bike lane and door-zone parking on both sides (mixed traffic + door risk).
+- 3–4 = multi-lane road with no bike infrastructure, or a residential street with heavy parked
+  cars and visible cut-through traffic.
+- 1–2 = high-speed arterial, highway shoulder, or any road where a reasonable adult would
+  refuse to ride.
 
 {LOCALIZATION_NOTE}
 
